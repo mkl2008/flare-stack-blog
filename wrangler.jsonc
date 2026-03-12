@@ -17,7 +17,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_id": "D1_DATABASE_ID",
+      "database_id": "df3d10b4-baeb-4fc7-8328-fa457d4200ad",
       "migrations_dir": "migrations",
       "remote": true,
     },
@@ -32,7 +32,7 @@
   "kv_namespaces": [
     {
       "binding": "KV",
-      "id": "lxh",
+      "id": "6425e1bba3e34a4e899de7df6702caf5",
       "remote": true,
     },
   ],
