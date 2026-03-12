@@ -17,7 +17,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_id": "lxh",
+      "database_id": "D1_DATABASE_ID",
       "migrations_dir": "migrations",
       "remote": true,
     },
@@ -80,10 +80,10 @@
     "remote": true,
   },
   "queues": {
-    "producers": [{ "binding": "QUEUE", "queue": "lxh" }],
+    "producers": [{ "binding": "QUEUE", "queue": "blog-queue" }],
     "consumers": [
       {
-        "queue": "lxh",
+        "queue": "blog-queue",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
         "max_retries": 3,
@@ -157,7 +157,7 @@
         },
       ],
       "queues": {
-        "producers": [{ "binding": "QUEUE", "queue": "lxh" }],
+        "producers": [{ "binding": "QUEUE", "queue": "blog-queue" }],
       },
     },
   },
