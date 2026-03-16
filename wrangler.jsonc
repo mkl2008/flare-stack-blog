@@ -17,14 +17,14 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_id": "df3d10b4-baeb-4fc7-8328-fa457d4200ad",
+      "database_id": "fa3ef379-feab-49a5-9b77-5cdb34dc79c2",
       "migrations_dir": "migrations",
       "remote": true,
     },
   ],
   "r2_buckets": [
     {
-      "bucket_name": "lxh",
+      "bucket_name": "blog",
       "binding": "R2",
       "remote": true,
     },
@@ -32,7 +32,7 @@
   "kv_namespaces": [
     {
       "binding": "KV",
-      "id": "6425e1bba3e34a4e899de7df6702caf5",
+      "id": "09adc087bc584baf872fdd6b833dc9c3",
       "remote": true,
     },
   ],
