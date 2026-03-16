@@ -1,14 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
+import { eq } from "drizzle-orm";
 import {
   createAdminTestContext,
   createTestContext,
   seedUser,
   waitForBackgroundTasks,
 } from "tests/test-utils";
-import * as PostService from "@/features/posts/posts.service";
-import * as TagService from "@/features/tags/tags.service";
+import { beforeEach, describe, expect, it } from "vitest";
 import * as CacheService from "@/features/cache/cache.service";
+import * as PostService from "@/features/posts/services/posts.service";
+import * as TagService from "@/features/tags/tags.service";
+import { PostsTable } from "@/lib/db/schema";
 import { unwrap } from "@/lib/errors";
 
 describe("PostService", () => {
@@ -84,6 +86,48 @@ describe("PostService", () => {
       expect(post).not.toBeNull();
       expect(post?.id).toBe(id);
       expect(post?.title).toBe("Public Post");
+    });
+
+    it("should backfill publicContentJson for legacy published posts on read", async () => {
+      const publicContext = createTestContext();
+      const { id } = await PostService.createEmptyPost(adminContext);
+      await updatePost({
+        id,
+        data: {
+          title: "Legacy Snapshot",
+          slug: "legacy-snapshot",
+          status: "published",
+          publishedAt: new Date(),
+          contentJson: {
+            type: "doc",
+            content: [
+              {
+                type: "codeBlock",
+                attrs: { language: "ts" },
+                content: [{ type: "text", text: "const answer = 42;" }],
+              },
+            ],
+          },
+        },
+      });
+      const beforeRead = await adminContext.db.query.PostsTable.findFirst({
+        where: eq(PostsTable.id, id),
+      });
+
+      const post = await PostService.findPostBySlug(publicContext, {
+        slug: "legacy-snapshot",
+      });
+      expect(post).not.toBeNull();
+
+      await waitForBackgroundTasks(publicContext.executionCtx);
+
+      const storedPost = await adminContext.db.query.PostsTable.findFirst({
+        where: eq(PostsTable.id, id),
+      });
+      expect(storedPost?.publicContentJson).toBeTruthy();
+      expect(storedPost?.updatedAt?.getTime()).toBe(
+        beforeRead?.updatedAt?.getTime(),
+      );
     });
 
     it("should delete a post", async () => {
@@ -222,6 +266,7 @@ describe("PostService", () => {
   describe("Post Pagination (getPostsCursor)", () => {
     it("should get posts with cursor pagination", async () => {
       const publicContext = createTestContext();
+      const basePublishedAt = new Date("2026-01-01T12:00:00.000Z");
 
       // Create 5 published posts
       for (let i = 1; i <= 5; i++) {
@@ -232,7 +277,11 @@ describe("PostService", () => {
             title: `Post ${i}`,
             slug: `post-${i}`,
             status: "published",
-            publishedAt: new Date(Date.now() - i * 1000), // Different times for ordering
+            // PostsTable stores timestamps with second precision, so use
+            // deterministic minute-level gaps to avoid flaky ordering.
+            publishedAt: new Date(
+              basePublishedAt.getTime() - (i - 1) * 60 * 1000,
+            ),
           },
         });
       }

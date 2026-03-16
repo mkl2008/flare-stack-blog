@@ -1,4 +1,9 @@
 import { z } from "zod";
+import * as AiService from "@/features/ai/ai.service";
+import * as CacheService from "@/features/cache/cache.service";
+import { syncPostMedia } from "@/features/posts/data/post-media.data";
+import * as PostRevisionRepo from "@/features/posts/data/post-revisions.data";
+import * as PostRepo from "@/features/posts/data/posts.data";
 import type {
   DeletePostInput,
   FindPostByIdInput,
@@ -11,27 +16,32 @@ import type {
   PreviewSummaryInput,
   StartPostProcessInput,
   UpdatePostInput,
-} from "@/features/posts/posts.schema";
-import * as CacheService from "@/features/cache/cache.service";
-import { isFuturePublishDate } from "@/features/posts/utils/date";
-import { syncPostMedia } from "@/features/posts/data/post-media.data";
-import * as PostRepo from "@/features/posts/data/posts.data";
+} from "@/features/posts/schema/posts.schema";
 import {
   POSTS_CACHE_KEYS,
   PostListResponseSchema,
   PostWithTocSchema,
-} from "@/features/posts/posts.schema";
-import * as AiService from "@/features/ai/ai.service";
-import { generateTableOfContents } from "@/features/posts/utils/toc";
+} from "@/features/posts/schema/posts.schema";
+import { logPostAutoSnapshot } from "@/features/posts/services/post-auto-snapshot.logging";
+import * as PostAutoSnapshotService from "@/features/posts/services/post-auto-snapshot.service";
 import {
   convertToPlainText,
   highlightCodeBlocks,
   slugify,
 } from "@/features/posts/utils/content";
+import { isFuturePublishDate } from "@/features/posts/utils/date";
+import { calculatePostHash } from "@/features/posts/utils/sync";
+import { generateTableOfContents } from "@/features/posts/utils/toc";
+import * as SearchService from "@/features/search/service/search.service";
 import { err, ok } from "@/lib/errors";
 import { purgePostCDNCache } from "@/lib/invalidate";
-import * as SearchService from "@/features/search/service/search.service";
-import { calculatePostHash } from "@/features/posts/utils/sync";
+
+function stripPublicContentJson<T extends { publicContentJson?: unknown }>(
+  post: T,
+): Omit<T, "publicContentJson"> {
+  const { publicContentJson: _publicContentJson, ...rest } = post;
+  return rest;
+}
 
 export async function getPostsCursor(
   context: DbContext & { executionCtx: ExecutionContext },
@@ -74,15 +84,24 @@ export async function findPostBySlug(
     });
     if (!post) return null;
 
-    let contentJson = post.contentJson;
-    if (contentJson) {
+    let contentJson = post.publicContentJson ?? post.contentJson;
+    // Backward-compatible fallback for posts that haven't been reprocessed yet.
+    // New publishes should read pre-highlighted content from `publicContentJson`.
+    if (!post.publicContentJson && contentJson) {
       contentJson = await highlightCodeBlocks(contentJson);
+      context.executionCtx.waitUntil(
+        PostRepo.updatePublicContentSnapshot(
+          context.db,
+          post.id,
+          contentJson,
+        ).then(() => undefined),
+      );
     }
 
     return {
-      ...post,
+      ...stripPublicContentJson(post),
       contentJson,
-      toc: generateTableOfContents(post.contentJson),
+      toc: generateTableOfContents(contentJson),
     };
   };
 
@@ -163,7 +182,7 @@ export async function generateSummaryByPostId({
     return err({ reason: "POST_NOT_FOUND" });
   }
 
-  return ok(updatedPost);
+  return ok(stripPublicContentJson(updatedPost));
 }
 
 // ============ Admin Service Methods ============
@@ -254,7 +273,7 @@ export async function findPostBySlugAdmin(
   });
   if (!post) return null;
   return {
-    ...post,
+    ...stripPublicContentJson(post),
     toc: generateTableOfContents(post.contentJson),
   };
 }
@@ -290,7 +309,7 @@ export async function findPostById(
     isSynced = dbHash === kvHash;
   }
 
-  return { ...post, isSynced, hasPublicCache };
+  return { ...stripPublicContentJson(post), isSynced, hasPublicCache };
 }
 
 export async function updatePost(
@@ -307,6 +326,13 @@ export async function updatePost(
       syncPostMedia(context.db, updatedPost.id, data.data.contentJson),
     );
   }
+
+  context.executionCtx.waitUntil(
+    PostAutoSnapshotService.enqueuePostAutoSnapshot(context, {
+      postId: updatedPost.id,
+      source: "post_update",
+    }),
+  );
 
   return ok(updatedPost);
 }
@@ -365,6 +391,45 @@ export async function startPostProcessWorkflow(
 ) {
   let publishedAtISO: string | undefined;
 
+  if (data.status === "published") {
+    const post = await PostRepo.findPostById(context.db, data.id);
+    if (post) {
+      const snapshotHash = await calculatePostHash({
+        title: post.title,
+        contentJson: post.contentJson,
+        summary: post.summary,
+        tagIds: post.tags.map((tag) => tag.id),
+        slug: post.slug,
+        publishedAt: post.publishedAt,
+        readTimeInMinutes: post.readTimeInMinutes,
+      });
+
+      await PostRevisionRepo.insertPostRevision(context.db, {
+        postId: post.id,
+        reason: "publish",
+        snapshotHash,
+        snapshotJson: {
+          title: post.title,
+          summary: post.summary,
+          slug: post.slug,
+          status: post.status,
+          publishedAt: post.publishedAt ? post.publishedAt.toISOString() : null,
+          readTimeInMinutes: post.readTimeInMinutes,
+          contentJson: post.contentJson,
+          tagIds: [...new Set(post.tags.map((tag) => tag.id))].sort(
+            (a, b) => a - b,
+          ),
+        },
+      });
+
+      logPostAutoSnapshot(context.env, "publish_revision_created", {
+        postId: post.id,
+        reason: "publish",
+        snapshotHash,
+      });
+    }
+  }
+
   // Check if we need to auto-set the published date
   if (data.status === "published") {
     const post = await PostRepo.findPostById(context.db, data.id);
@@ -403,9 +468,11 @@ export async function startPostProcessWorkflow(
 
   // If this is a future post, create a new scheduled publish workflow
   if (data.status === "published" && isFuture) {
-    await context.env.SCHEDULED_PUBLISH_WORKFLOW.create({
-      id: scheduledId,
-      params: { postId: data.id, publishedAt: publishedAtISO! },
-    });
+    await context.env.SCHEDULED_PUBLISH_WORKFLOW.createBatch([
+      {
+        id: scheduledId,
+        params: { postId: data.id, publishedAt: publishedAtISO! },
+      },
+    ]);
   }
 }
