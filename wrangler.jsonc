@@ -10,21 +10,21 @@
   "keep_vars": true,
   "routes": [
     {
-      "pattern": "works.91lxh.cc.cd",
+      "pattern": "lxhub.cc.cd",
       "custom_domain": true,
     },
   ],
   "d1_databases": [
     {
       "binding": "DB",
-      "database_id": "fa3ef379-feab-49a5-9b77-5cdb34dc79c2",
+      "database_id": "bde267d4-48f4-48ef-b899-a9f479878d8b",
       "migrations_dir": "migrations",
       "remote": true,
     },
   ],
   "r2_buckets": [
     {
-      "bucket_name": "blog",
+      "bucket_name": "lxh",
       "binding": "R2",
       "remote": true,
     },
@@ -32,7 +32,7 @@
   "kv_namespaces": [
     {
       "binding": "KV",
-      "id": "09adc087bc584baf872fdd6b833dc9c3",
+      "id": "3346741fecfe436b8170f4acb12d8137",
       "remote": true,
     },
   ],
